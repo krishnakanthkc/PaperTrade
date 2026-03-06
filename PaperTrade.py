@@ -3,7 +3,7 @@ import pandas as pd
 
 # 1. Download Data (Flattening the MultiIndex)
 ticker = "NIFTYBEES.NS"
-data = yf.download(ticker, start="2021-01-01", end="2026-03-05")
+data = yf.download(ticker, start="2020-01-01", end="2020-12-31")
 
 # This line fixes the 'KeyError' by simplifying the table structure
 data.columns = data.columns.get_level_values(0)
