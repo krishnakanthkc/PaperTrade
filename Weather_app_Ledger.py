@@ -24,7 +24,7 @@ as_of_date = st.sidebar.date_input("Analysis 'As Of' Date", value=datetime(2026,
 lookback = st.sidebar.slider("Rolling Window (Days)", 3, 30, 3)
 
 # Portfolio starts from 1,000 INR
-port_val = st.sidebar.number_input("Total Portfolio Value (INR)", min_value=1000, value=1000)
+port_val = st.sidebar.number_input("Total Portfolio Value (INR)", min_value=1000, value=1000, step=1000)
 
 p_list = st.sidebar.text_input("Power Basket", "NTPC.NS, POWERGRID.NS").split(", ")
 d_list = st.sidebar.text_input("Defensive Basket", "NESTLEIND.NS, HINDUNILVR.NS, SUNPHARMA.NS").split(", ")
