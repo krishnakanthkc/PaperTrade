@@ -3,70 +3,84 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
-# UI Configuration
-st.set_page_config(page_title="Weather-Alpha Dashboard", layout="wide")
+# Page Setup
+st.set_page_config(page_title="Weather-Alpha Engine 2026", layout="wide")
 st.title("🌦️ Weather-Regime Alpha Engine")
+st.markdown("---")
 
-# 1. Sidebar - Dynamic Inputs
-st.sidebar.header("Strategy Configuration")
-start_date = st.sidebar.date_input("Start Date", value=pd.to_datetime("2024-01-01"))
-end_date = st.sidebar.date_input("End Date", value=pd.to_datetime("2026-05-04"))
+# 1. SIDEBAR: Controls
+st.sidebar.header("🕹️ Strategy Controls")
+start_date = st.sidebar.date_input("Start Date", value=datetime.now() - timedelta(days=730))
+end_date = st.sidebar.date_input("End Date", value=datetime(2026, 5, 4))
 
-power_list = st.sidebar.multiselect("Power Basket", ['NTPC.NS', 'TATAPOWER.NS', 'POWERGRID.NS'], default=['NTPC.NS', 'POWERGRID.NS'])
-def_list = st.sidebar.multiselect("Defensive Basket", ['NESTLEIND.NS', 'HINDUNILVR.NS', 'BRITANNIA.NS', 'SUNPHARMA.NS', 'CIPLA.NS'], default=['HINDUNILVR.NS', 'SUNPHARMA.NS'])
-benchmark = st.sidebar.selectbox("Benchmark Index", ['^NSEI', '^BSESN'], index=0)
+p_list = st.sidebar.text_input("Power Basket (split by comma)", "NTPC.NS, POWERGRID.NS").split(", ")
+d_list = st.sidebar.text_input("Defensive Basket (split by comma)", "NESTLEIND.NS, HINDUNILVR.NS, SUNPHARMA.NS").split(", ")
+mkt = st.sidebar.selectbox("Market Benchmark", ["^NSEI", "^BSESN"])
 
-# 2. Data Fetching
+# 2. DATA ENGINE
 @st.cache_data
-def load_data(tickers, start, end):
+def get_clean_data(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, progress=False)['Close']
-    return df.ffill()
+    return df.ffill().dropna()
 
-data = load_data(power_list + def_list + [benchmark], start_date, end_date)
-returns = data.pct_change().dropna()
+raw_data = get_clean_data(p_list + d_list + [mkt], start_date, end_date)
+rets = raw_data.pct_change().dropna()
 
-# 3. Dynamic Strategy Logic
-returns['Heat_Score'] = returns[power_list].mean(axis=1).rolling(10).mean()
-returns['Rain_Score'] = returns[def_list].mean(axis=1).rolling(10).mean()
-returns['Signal'] = np.where(returns['Heat_Score'] > returns['Rain_Score'], 1, 0)
+# 3. QUANT LOGIC (Regime Switching)
+rets['Heat'] = rets[p_list].mean(axis=1).rolling(10).mean()
+rets['Rain'] = rets[d_list].mean(axis=1).rolling(10).mean()
+rets['Signal'] = np.where(rets['Heat'] > rets['Rain'], 1, 0)
 
-# Performance Logic
-returns['Base_Strat'] = np.where(returns['Signal'] == 1, returns[power_list].mean(axis=1), returns[def_list].mean(axis=1))
-returns['Recent_Perf'] = returns['Base_Strat'].rolling(10).sum()
-returns['Risk_Weight'] = np.where(returns['Recent_Perf'] < 0, 0.20, 0.80)
-returns['Final_Ret'] = (returns['Base_Strat'] * returns['Risk_Weight'].shift(1)) + (0.06/252 * (1 - returns['Risk_Weight'].shift(1)))
+rets['Base'] = np.where(rets['Signal'] == 1, rets[p_list].mean(axis=1), rets[d_list].mean(axis=1))
+rets['Perf_Gate'] = rets['Base'].rolling(10).sum()
+rets['Risk_Weight'] = np.where(rets['Perf_Gate'] < 0, 0.20, 0.80)
 
-# 4. Metrics Calculation
-def get_metrics(strat_ret, mkt_ret):
-    cum_ret = (1 + strat_ret).cumprod()
+# Final Returns Calculation
+rf_daily = 0.06 / 252
+rets['Strat'] = (rets['Base'] * rets['Risk_Weight'].shift(1)) + (rf_daily * (1 - rets['Risk_Weight'].shift(1)))
+rets = rets.dropna()
+
+# 4. METRICS (The Fix for NaN)
+def calc_metrics(strat_ret, mkt_ret):
+    cum = (1 + strat_ret).cumprod()
     days = (strat_ret.index[-1] - strat_ret.index[0]).days
-    xirr = (cum_ret.iloc[-1]**(365/days)) - 1
-    mdd = (cum_ret / cum_ret.cummax() - 1).min()
+    xirr = (cum.iloc[-1]**(365/days)) - 1 if days > 0 else 0
+    mdd = (cum / cum.cummax() - 1).min()
     
-    # Beta & Alpha
-    covariance = np.cov(strat_ret, mkt_ret)[0][1]
-    variance = np.var(mkt_ret)
-    beta = covariance / variance
-    alpha = xirr - (0.06 + beta * (mkt_ret.mean()*252 - 0.06)) # Jensen's Alpha
+    # Secure Beta Calculation
+    mkt_var = mkt_ret.var()
+    if mkt_var == 0 or np.isnan(mkt_var):
+        beta = 0.0
+    else:
+        beta = np.cov(strat_ret, mkt_ret)[0][1] / mkt_var
     
-    return xirr, mdd, beta, alpha, cum_ret
+    # Jensen's Alpha
+    mkt_annual = mkt_ret.mean() * 252
+    alpha = xirr - (0.06 + beta * (mkt_annual - 0.06))
+    
+    return xirr, mdd, beta, alpha, cum
 
-xirr, mdd, beta, alpha, cum_series = get_metrics(returns['Final_Ret'], returns[benchmark])
+xirr, mdd, beta, alpha, cum_series = calc_metrics(rets['Strat'], rets[mkt])
 
-# 5. Dashboard UI Layout
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("XIRR (Annualized)", f"{xirr*100:.2f}%")
-col2.metric("Max Drawdown", f"{mdd*100:.2f}%", delta_color="inverse")
-col3.metric("Strategy Beta", f"{beta:.2f}")
-col4.metric("Jensen's Alpha", f"{alpha*100:.2f}%")
+# 5. UI DISPLAY
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("XIRR (Annualized)", f"{xirr*100:.2f}%")
+m2.metric("Max Drawdown", f"{mdd*100:.2f}%", delta_color="inverse")
+m3.metric("Strategy Beta", f"{beta:.2f}")
+m4.metric("Jensen's Alpha", f"{alpha*100:.2f}%")
 
-# Equity Curve Plot
+# Charting
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy Equity", line=dict(color='orange', width=2)))
-fig.add_trace(go.Scatter(x=cum_series.index, y=(1+returns[benchmark]).cumprod(), name="Market Benchmark", line=dict(color='gray', dash='dash')))
+fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy", line=dict(color='#00FFAA')))
+fig.add_trace(go.Scatter(x=cum_series.index, y=(1+rets[mkt]).cumprod(), name="Market", line=dict(color='gray', dash='dot')))
 st.plotly_chart(fig, use_container_width=True)
 
-# Status Output
-last_signal = "RAIN PIVOT" if returns['Rain_Score'].iloc[-1] > returns['Heat_Score'].iloc[-1] else "HEATWAVE"
-st.success(f"**Current Status:** {last_signal} | **Risk Weight:** {returns['Risk_Weight'].iloc[-1]*100}%")
+# 6. LIVE STATUS AGENT
+last_regime = "RAIN PIVOT" if rets['Rain'].iloc[-1] > rets['Heat'].iloc[-1] else "HEATWAVE"
+top_asset = rets[d_list if last_regime == "RAIN PIVOT" else p_list].iloc[-1].idxmax()
+surge = rets[top_asset].iloc[-1] * 100
+
+st.subheader(f"🛡️ Active Agent Status: {last_regime}")
+st.info(f"**Deployment Strategy:** Overweight **{top_asset}** based on {surge:.2f}% intraday surge. | **Risk Weight:** {rets['Risk_Weight'].iloc[-1]*100}%")
