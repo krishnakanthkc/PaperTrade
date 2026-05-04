@@ -22,8 +22,6 @@ st.sidebar.header("🕹️ Strategy Controls")
 start_date = st.sidebar.date_input("Backtest Start", value=datetime(2026, 1, 1))
 as_of_date = st.sidebar.date_input("Analysis 'As Of' Date", value=datetime(2026, 5, 4))
 lookback = st.sidebar.slider("Rolling Window (Days)", 3, 30, 3)
-
-# Portfolio starts from 1,000 INR
 port_val = st.sidebar.number_input("Total Portfolio Value (INR)", min_value=1000, value=1000, step=1000)
 
 p_list = st.sidebar.text_input("Power Basket", "NTPC.NS, POWERGRID.NS").split(", ")
@@ -52,51 +50,52 @@ rf_daily = 0.06 / 252
 rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + (rf_daily * (1 - rets['Risk_W'].shift(1)))
 strat_rets = rets.loc[start_date:as_of_date].dropna()
 
-# --- 5. DUAL XIRR & LEAKAGE LOGIC ---
-def calc_dual_performance(s_ret, m_ret, signal_series):
+# --- 5. PERFORMANCE CALCULATIONS ---
+def calc_final_metrics(s_ret, m_ret, signal_series, initial_cap):
     cum_gross = (1 + s_ret['Strat']).cumprod()
     mdd = (cum_gross / cum_gross.cummax() - 1).min()
     
-    # Gross Stats
-    abs_gross = cum_gross.iloc[-1] - 1.0
     cf_dates = [s_ret.index[0], s_ret.index[-1]]
-    try: x_gross = xirr(cf_dates, [-1.0, cum_gross.iloc[-1]])
-    except: x_gross = 0.0
+    try: xg = xirr(cf_dates, [-1.0, cum_gross.iloc[-1]])
+    except: xg = 0.0
     
-    # Friction & Tax (Leakage)
+    abs_gross = cum_gross.iloc[-1] - 1.0
     flips = signal_series.diff().abs().sum()
-    friction = flips * 0.0020 # 0.20% slippage/brokerage per flip
+    friction = flips * 0.0020
     net_pre_tax = abs_gross - friction
-    tax = max(0, net_pre_tax * 0.15) # 15% STCG
-    total_leakage = friction + tax
+    tax = max(0, net_pre_tax * 0.15)
     
-    # Net Stats
-    abs_net = abs_gross - total_leakage
-    try: x_net = xirr(cf_dates, [-1.0, 1.0 + abs_net])
-    except: x_net = 0.0
+    abs_net = abs_gross - friction - tax
+    cash_earned = initial_cap * abs_net
+    try: xn = xirr(cf_dates, [-1.0, 1.0 + abs_net])
+    except: xn = 0.0
     
-    # Beta
-    m_range = m_ret.loc[s_ret.index]
-    m_var = m_range.var()
-    beta = np.cov(s_ret['Strat'], m_range)[0][1] / m_var if m_var != 0 else 0
+    beta = np.cov(s_ret['Strat'], m_ret.loc[s_ret.index])[0][1] / m_ret.loc[s_ret.index].var()
     
-    return x_gross, x_net, abs_gross, abs_net, total_leakage, mdd, beta, cum_gross
+    return xg, xn, abs_net, cash_earned, mdd, beta, cum_gross
 
-xg, xn, ag, an, leak, mdd, beta, cum_series = calc_dual_performance(strat_rets, rets[mkt], rets['Signal'])
+xg, xn, an, cash, mdd, beta, cum_series = calc_final_metrics(strat_rets, rets[mkt], rets['Signal'], port_val)
 
-# --- 6. UI: METRIC DASHBOARD ---
+# --- 6. UI: METRICS WITH TOOLTIPS ---
 st.title("🌦️ Weather-Regime Alpha Engine")
-m1, m2, m3, m4 = st.columns(4)
 
-m1.metric("Gross XIRR", f"{xg*100:.2f}%")
-m2.metric("Net XIRR (Post-Tax)", f"{xn*100:.2f}%", delta=f"{- (xg-xn)*100:.2f}%")
-m3.metric("Net Abs Return", f"{an*100:.2f}%")
-#m4.metric("Leakage (Fees+Tax)", f"-{leak*100:.2f}%", help=f"Estimated Cost: ₹{port_val * leak:.2f}")
-m4.metric("Max Drawdown", f"{mdd*100:.2f}%")
+m1, m2, m3, m4, m5 = st.columns(5)
+
+# Helper function for pretty printing large numbers in the UI
+def format_large(n):
+    if n >= 1e6: return f"{n/1e6:.2f}M"
+    if n >= 1e3: return f"{n/1e3:.2f}K"
+    return f"{n:.2f}"
+
+m1.metric("Gross XIRR", f"{xg*100:.2f}%", help=f"Full Value: {xg*100}%")
+m2.metric("Net XIRR", f"{xn*100:.2f}%", delta=f"{- (xg-xn)*100:.2f}%", help=f"Full Value: {xn*100}%")
+m3.metric("Net Abs Return", f"{format_large(an*100)}%", help=f"Exact Percentage: {an*100}%")
+m4.metric("Cash Profit (Net)", f"₹{format_large(cash)}", help=f"Exact Profit: ₹{cash:,.2f}")
+m5.metric("Max Drawdown", f"{mdd*100:.2f}%")
 
 # Equity Curve
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy (Gross)", line=dict(color='#00FFAA')))
+fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy", line=dict(color='#00FFAA')))
 fig.add_trace(go.Scatter(x=cum_series.index, y=(1+rets[mkt].loc[strat_rets.index]).cumprod(), name="Market", line=dict(color='gray', dash='dot')))
 fig.update_layout(template="plotly_dark", height=400, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(fig, use_container_width=True)
@@ -104,7 +103,7 @@ st.plotly_chart(fig, use_container_width=True)
 # --- 7. ADVICE & LEDGER ---
 st.markdown("---")
 cur_regime = "RAIN PIVOT" if rets['Rain'].iloc[-1] > rets['Heat'].iloc[-1] else "HEATWAVE"
-st.subheader(f"📅 Trade Advice: {cur_regime} ({as_of_date.strftime('%Y-%m-%d')})")
+st.subheader(f"📅 Trade Advice: {cur_regime}")
 
 c1, c2 = st.columns(2)
 with c1:
@@ -122,7 +121,7 @@ with c2:
     if final_exits:
         st.table(pd.DataFrame([{"Ticker": t, "Price": round(raw_data[t].iloc[-1], 2), "Action": "EXIT"} for t in final_exits]))
     else:
-        st.write("No open positions found for exit.")
+        st.write("No open positions for exit.")
 
 st.markdown("---")
 st.subheader("📝 Manual Trade Ledger")
