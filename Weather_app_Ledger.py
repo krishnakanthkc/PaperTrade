@@ -31,7 +31,6 @@ mkt = st.sidebar.selectbox("Market Benchmark", ["^NSEI"])
 # --- 3. DATA ENGINE ---
 @st.cache_data
 def get_full_data(tickers, start, end):
-    # Buffer for rolling window calculation
     df = yf.download(tickers, start=start - timedelta(days=40), end=end + timedelta(days=1), progress=False)['Close']
     return df.ffill().dropna()
 
@@ -51,35 +50,45 @@ rf_daily = 0.06 / 252
 rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + (rf_daily * (1 - rets['Risk_W'].shift(1)))
 strat_rets = rets.loc[start_date:as_of_date].dropna()
 
-# --- 5. TOP METRICS BAR ---
+# --- 5. UPDATED METRICS (Added Absolute Return) ---
 def calc_stats(s_ret, m_ret):
     cum = (1 + s_ret['Strat']).cumprod()
     mdd = (cum / cum.cummax() - 1).min()
-    # XIRR calculation
+    
+    # Absolute Return = (Final / Initial) - 1
+    abs_ret = cum.iloc[-1] - 1.0
+    
+    # XIRR
     cf_dates = [s_ret.index[0], s_ret.index[-1]]
     cf_amounts = [-1.0, cum.iloc[-1]]
     try: x_val = xirr(cf_dates, cf_amounts)
     except: x_val = 0.0
-    # Beta
-    m_var = m_ret.loc[s_ret.index].var()
-    beta = np.cov(s_ret['Strat'], m_ret.loc[s_ret.index])[0][1] / m_var if m_var != 0 else 0
-    alpha = x_val - (0.06 + beta * (m_ret.mean()*252 - 0.06))
-    return x_val, mdd, beta, alpha, cum
+    
+    # Beta & Alpha
+    m_range = m_ret.loc[s_ret.index]
+    m_var = m_range.var()
+    beta = np.cov(s_ret['Strat'], m_range)[0][1] / m_var if m_var != 0 else 0
+    alpha = x_val - (0.06 + beta * (m_range.mean()*252 - 0.06))
+    
+    return x_val, abs_ret, mdd, beta, alpha, cum
 
-x_val, mdd, beta, alpha, cum_series = calc_stats(strat_rets, rets[mkt])
+x_val, abs_ret, mdd, beta, alpha, cum_series = calc_stats(strat_rets, rets[mkt])
 
 st.title("🌦️ Weather-Regime Alpha Engine")
-m1, m2, m3, m4 = st.columns(4)
+
+# UI Layout: 5 Columns for 5 Key Metrics
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric(f"XIRR ({lookback}D)", f"{x_val*100:.2f}%")
-m2.metric("Max Drawdown", f"{mdd*100:.2f}%")
-m3.metric("Strategy Beta", f"{beta:.2f}")
-m4.metric("Jensen's Alpha", f"{alpha*100:.2f}%")
+m2.metric("Absolute Return", f"{abs_ret*100:.2f}%")
+m3.metric("Max Drawdown", f"{mdd*100:.2f}%")
+m4.metric("Strategy Beta", f"{beta:.2f}")
+m5.metric("Jensen's Alpha", f"{alpha*100:.2f}%")
 
 # --- 6. EQUITY CURVE ---
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy", line=dict(color='#00FFAA')))
+fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series, name="Strategy", line=dict(color='#00FFAA', width=2)))
 fig.add_trace(go.Scatter(x=cum_series.index, y=(1+rets[mkt].loc[strat_rets.index]).cumprod(), name="Market", line=dict(color='gray', dash='dot')))
-fig.update_layout(template="plotly_dark", height=400, margin=dict(l=10, r=10, t=10, b=10))
+fig.update_layout(template="plotly_dark", height=400, margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified")
 st.plotly_chart(fig, use_container_width=True)
 
 # --- 7. ACTIONABLE ORDERS ---
@@ -97,17 +106,16 @@ with c1:
     alloc = (port_val * risk_w) / len(to_buy)
     for t in to_buy:
         p = raw_data[t].iloc[-1]
-        buy_df.append({"Ticker": t, "Price": round(p, 2), "Qty": int(alloc/p)})
+        buy_df.append({"Ticker": t, "Price": round(p, 2), "Qty": int(alloc/p), "Action": "BUY"})
     st.table(pd.DataFrame(buy_df))
 
 with c2:
     st.error("🛑 SELL/EXIT PREVIOUS REGIME")
     exit_list = p_list if cur_regime == "RAIN PIVOT" else d_list
-    # Filter only what's currently marked as 'Open' in our ledger
     active_in_ledger = st.session_state.trade_log[st.session_state.trade_log['Status'] == 'Open']['Ticker'].tolist()
     final_exits = [t for t in exit_list if t in active_in_ledger]
     if final_exits:
-        st.table(pd.DataFrame([{"Ticker": t, "LTP": round(raw_data[t].iloc[-1], 2)} for t in final_exits]))
+        st.table(pd.DataFrame([{"Ticker": t, "LTP": round(raw_data[t].iloc[-1], 2), "Action": "EXIT" } for t in final_exits]))
     else:
         st.write("No active positions from old regime found in ledger.")
 
@@ -119,4 +127,4 @@ edited_df = st.data_editor(st.session_state.trade_log, num_rows="dynamic", use_c
 if st.button("💾 Save & Sync Ledger"):
     st.session_state.trade_log = edited_df
     edited_df.to_csv(LEDGER_FILE, index=False)
-    st.success("Ledger synced to disk!")
+    st.success("Ledger synced to disk (trade_ledger.csv)!")
