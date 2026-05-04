@@ -120,3 +120,47 @@ with tab2:
     st.table(generate_order_table(d_list, val_def))
 
 st.warning(f"**Cash Reserve:** Send **₹{portfolio_value * (1-risk_w):,.0f}** to Liquid Funds/Cash to maintain the -4.93% drawdown protection seen in your backtest.")
+
+# 7. SELL ORDER & TRADE HISTORY LOGIC
+st.markdown("---")
+st.subheader("🛑 Sell Order Details (Exits as of May 4, 2026)")
+
+def generate_sell_orders(rets, raw_data, p_list, d_list):
+    # Identify the last time the signal flipped
+    rets['Signal_Change'] = rets['Signal'].diff()
+    last_flip_date = rets[rets['Signal_Change'] != 0].index[-1]
+    
+    # Determine what we are EXITING
+    # If current Signal is 0 (Rain), we just EXITED Power (1)
+    current_signal = rets['Signal'].iloc[-1]
+    exit_tickers = p_list if current_signal == 0 else d_list
+    
+    sell_data = []
+    for ticker in exit_tickers:
+        exit_price = raw_data[ticker].iloc[-1]
+        # We find the price on the date we originally entered this regime
+        entry_price = raw_data[ticker].loc[last_flip_date]
+        pnl_pct = (exit_price - entry_price) / entry_price
+        
+        sell_data.append({
+            "Date of Order": datetime(2026, 5, 4).strftime("%Y-%m-%d"),
+            "Ticker": ticker,
+            "Action": "SELL / EXIT",
+            "Exit Price": f"₹{exit_price:.2f}",
+            "Entry Date": last_flip_date.strftime("%Y-%m-%d"),
+            "Regime P&L": f"{pnl_pct*100:+.2f}%"
+        })
+    return pd.DataFrame(sell_data)
+
+# Display Sell Table
+sell_table = generate_sell_orders(rets, raw_data, p_list, d_list)
+
+if not sell_table.empty:
+    st.table(sell_table)
+    st.caption(f"Note: These sells are triggered because the 3-day window confirmed a {last_regime} regime shift.")
+else:
+    st.write("No active sell orders. Current holdings align with the 2026 weather regime.")
+
+# 8. THE NIPPON CONTEXT (Manual Reminder)
+if "Nippon India Small Cap" in str(p_list + d_list):
+    st.sidebar.warning("Note: You have Nippon India Small Cap in your portfolio. Ensure exit loads are considered if rotating this fund frequently.")
