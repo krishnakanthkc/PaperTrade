@@ -20,7 +20,6 @@ if 'trade_log' not in st.session_state:
 def save_ledger():
     st.session_state.trade_log.to_csv(LEDGER_FILE, index=False)
 
-# NEW: Bulk Parser Logic
 def parse_bulk_kite_data(raw_text):
     try:
         df = pd.read_csv(io.StringIO(raw_text.strip()))
@@ -33,7 +32,7 @@ def parse_bulk_kite_data(raw_text):
         })
         return upload_df
     except Exception as e:
-        st.error(f"Format Error: {e}. Ensure you include the header row.")
+        st.error(f"Format Error: {e}")
         return None
 
 # --- 2. SIDEBAR ---
@@ -51,7 +50,7 @@ selected_p = st.sidebar.multiselect("Power Basket", potential_universe, default=
 selected_d = st.sidebar.multiselect("Defensive Basket", potential_universe, default=["NESTLEIND.NS", "HINDUNILVR.NS", "SUNPHARMA.NS"])
 
 st.sidebar.header("🕹️ Strategy Controls")
-port_val = st.sidebar.number_input("Portfolio Value (INR)", min_value=1000, value=10000)
+port_val = st.sidebar.number_input("Portfolio Value (INR)", min_value=1000, value=1000000)
 mkt_bench = st.sidebar.selectbox("Market Benchmark", ["^NSEI"])
 start_dt = st.sidebar.date_input("Backtest Start", value=datetime(2026, 4, 6))
 as_of_dt = st.sidebar.date_input("Analysis 'As Of' Date", value=datetime(2026, 5, 5))
@@ -70,7 +69,7 @@ all_tix = list(set(selected_p + selected_d + [mkt_bench]))
 raw_data_full = fetch_data(all_tix, start_dt, as_of_dt)
 
 # --- 4. CALCULATIONS ---
-curr_risk = 0.0 # Initialized here to prevent NameError
+curr_risk = 0.0 
 rets = pd.DataFrame()
 strat_rets = pd.DataFrame()
 
@@ -90,14 +89,14 @@ if raw_data_full is not None and not raw_data_full.empty:
         rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + ((0.06/252) * (1 - rets['Risk_W'].shift(1)))
         strat_rets = rets.loc[start_dt:as_of_dt]
 
-# --- 5. UI: TOP METRICS ---
+# --- 5. UI: TOP METRICS & GROWTH CHART ---
 st.title("🌦️ Weather-Alpha Engine")
 if not strat_rets.empty:
     cum_ret = (1 + strat_rets['Strat']).cumprod()
     abs_profit = port_val * (cum_ret.iloc[-1] - 1)
     
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Net XIRR", f"{((cum_ret.iloc[-1]**(365/max(1, (as_of_dt-start_dt).days))) - 1) * 100:.2f}%")
+    m1.metric("Estimated XIRR", f"{((cum_ret.iloc[-1]**(365/max(1, (as_of_dt-start_dt).days))) - 1) * 100:.2f}%")
     m2.metric("Total Profit", f"₹{abs_profit:,.2f}")
     m3.metric("Regime", "🔥 POWER" if rets['Signal'].iloc[-1] == 1 else "🛡️ DEFENSIVE")
     m4.metric("Risk Weight", f"{curr_risk*100:.0f}%")
@@ -107,33 +106,43 @@ if not strat_rets.empty:
     fig_growth.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret, name="Strategy Path", line=dict(color='#00FFAA', width=3)))
     fig_growth.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10), title="Strategy Growth Path")
     st.plotly_chart(fig_growth, use_container_width=True)
-else:
-    st.warning("Awaiting market data or analysis window...")
 
-# --- 6. ACTIONABLE TARGETS & LEDGER ---
+# --- 6. PORTFOLIO-AWARE ACTIONABLE TARGETS & LEDGER ---
 st.markdown("---")
 c1, c2 = st.columns([1.2, 1])
 
 with c1:
     deployed_cap = port_val * curr_risk
-    st.subheader(f"🎯 Actionable Targets (₹{deployed_cap:,.2f})")
+    st.subheader(f"🎯 Actionable Targets (Total ₹{deployed_cap:,.2f})")
+    
     if curr_risk == 0:
         st.error("🚨 BLACK SWAN GATE ACTIVE: Stay in Cash.")
     elif not rets.empty:
         active_basket = selected_p if rets['Signal'].iloc[-1] == 1 else selected_d
         cap_per = deployed_cap / len(active_basket)
+        
+        # Cross-reference with Ledger
+        holding_summary = st.session_state.trade_log.groupby("Ticker")["Qty"].sum().to_dict()
+
         t_cols = st.columns(len(active_basket))
         for i, t in enumerate(active_basket):
             p = prices[t].iloc[-1]
-            qty = int(cap_per // p)
+            target_qty = int(cap_per // p)
+            actual_qty = holding_summary.get(t, 0)
+            
             with t_cols[i]:
-                st.info(f"**{t}**")
-                st.metric("Qty", f"{qty}")
-                st.caption(f"@ ₹{p:,.2f}")
+                # Visual logic for "Bought" vs "To Buy"
+                if actual_qty >= target_qty and target_qty > 0:
+                    st.success(f"**{t}**")
+                    st.metric("✅ Owned", f"{actual_qty}")
+                elif target_qty > 0:
+                    st.warning(f"**{t}**")
+                    st.metric("⚠️ Buy", f"{target_qty - actual_qty}")
+                
+                st.caption(f"LTP: ₹{p:,.2f}")
 
 with c2:
     st.subheader("📝 Trade Ledger")
-    # NEW: Bulk Sync from Kite
     with st.expander("📥 Bulk Sync from Kite"):
         kite_input = st.text_area("Paste CSV columns here:", height=100)
         if st.button("Process & Sync"):
@@ -144,7 +153,6 @@ with c2:
                 st.success("Synced!")
                 st.rerun()
 
-    # Quick Add Form
     with st.expander("➕ Manual Log"):
         with st.form("add_t", clear_on_submit=True):
             f1, f2, f3 = st.columns(3)
@@ -158,7 +166,7 @@ with c2:
                 st.rerun()
     
     if not st.session_state.trade_log.empty:
-        edited_df = st.data_editor(st.session_state.trade_log, num_rows="dynamic", use_container_width=True)
+        edited_df = st.data_editor(st.session_state.trade_log, num_rows="dynamic", use_container_width=True, key="ledger_editor")
         if st.button("💾 Save Table Changes"):
             st.session_state.trade_log = edited_df
             save_ledger()
@@ -168,7 +176,7 @@ st.markdown("---")
 st.subheader("📊 Technical Deep Dive")
 inspect_stock = st.selectbox("Inspect Asset", all_tix)
 
-if not raw_data_full.empty:
+if raw_data_full is not None and not raw_data_full.empty:
     df_t = raw_data_full.xs(inspect_stock, axis=1, level=1).copy() if isinstance(raw_data_full.columns, pd.MultiIndex) else raw_data_full.copy()
     df_t['TR'] = pd.concat([df_t['High']-df_t['Low'], abs(df_t['High']-df_t['Close'].shift(1)), abs(df_t['Low']-df_t['Close'].shift(1))], axis=1).max(axis=1)
     df_t['ATR'] = df_t['TR'].rolling(5).mean()
