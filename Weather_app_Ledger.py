@@ -4,8 +4,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from pyxirr import xirr
 import os
+import io
 
 # --- 1. CONFIG & PERSISTENT LEDGER ---
 st.set_page_config(page_title="Weather-Alpha Engine 2026", layout="wide")
@@ -20,7 +20,23 @@ if 'trade_log' not in st.session_state:
 def save_ledger():
     st.session_state.trade_log.to_csv(LEDGER_FILE, index=False)
 
-# --- 2. SIDEBAR: CONNECTIVITY & UNIVERSE ---
+# NEW: Bulk Parser Logic
+def parse_bulk_kite_data(raw_text):
+    try:
+        df = pd.read_csv(io.StringIO(raw_text.strip()))
+        upload_df = pd.DataFrame({
+            "Date": datetime.now().strftime("%Y-%m-%d"),
+            "Ticker": df["Instrument"].astype(str) + ".NS",
+            "Type": "BUY",
+            "Qty": df["Qty."],
+            "Price": df["Avg."]
+        })
+        return upload_df
+    except Exception as e:
+        st.error(f"Format Error: {e}. Ensure you include the header row.")
+        return None
+
+# --- 2. SIDEBAR ---
 st.sidebar.header("🔌 Connectivity")
 use_synthetic = st.sidebar.toggle("Use Synthetic Data (API Bypass)", value=True)
 
@@ -35,7 +51,7 @@ selected_p = st.sidebar.multiselect("Power Basket", potential_universe, default=
 selected_d = st.sidebar.multiselect("Defensive Basket", potential_universe, default=["NESTLEIND.NS", "HINDUNILVR.NS", "SUNPHARMA.NS"])
 
 st.sidebar.header("🕹️ Strategy Controls")
-port_val = st.sidebar.number_input("Portfolio Value (INR)", min_value=1000, value=1000000)
+port_val = st.sidebar.number_input("Portfolio Value (INR)", min_value=1000, value=10000)
 mkt_bench = st.sidebar.selectbox("Market Benchmark", ["^NSEI"])
 start_dt = st.sidebar.date_input("Backtest Start", value=datetime(2026, 4, 6))
 as_of_dt = st.sidebar.date_input("Analysis 'As Of' Date", value=datetime(2026, 5, 5))
@@ -45,23 +61,34 @@ crash_limit = st.sidebar.slider("Black Swan Threshold (%)", -10.0, -1.0, -4.0, 0
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
 def fetch_data(tickers, start, end):
-    data = yf.download(tickers, start=start-timedelta(days=100), end=end+timedelta(days=1), progress=False)
-    return data
+    try:
+        data = yf.download(tickers, start=start-timedelta(days=100), end=end+timedelta(days=1), progress=False)
+        return data if not data.empty else None
+    except: return None
 
 all_tix = list(set(selected_p + selected_d + [mkt_bench]))
 raw_data_full = fetch_data(all_tix, start_dt, as_of_dt)
 
 # --- 4. CALCULATIONS ---
-prices = raw_data_full['Close'].ffill()
-rets = prices.pct_change().dropna()
-rets['Heat'] = rets[selected_p].mean(axis=1).rolling(lookback).mean()
-rets['Rain'] = rets[selected_d].mean(axis=1).rolling(lookback).mean()
-rets['Signal'] = np.where(rets['Heat'] > rets['Rain'], 1, 0)
-rets['Base'] = np.where(rets['Signal'] == 1, rets[selected_p].mean(axis=1), rets[selected_d].mean(axis=1))
-rets['Mkt_Roll'] = rets[mkt_bench].rolling(lookback).sum()
-rets['Risk_W'] = np.where(rets['Mkt_Roll'] <= crash_limit, 0.0, np.where(rets['Base'].rolling(lookback).sum() < 0, 0.20, 0.80))
-rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + ((0.06/252) * (1 - rets['Risk_W'].shift(1)))
-strat_rets = rets.loc[start_dt:as_of_dt]
+curr_risk = 0.0 # Initialized here to prevent NameError
+rets = pd.DataFrame()
+strat_rets = pd.DataFrame()
+
+if raw_data_full is not None and not raw_data_full.empty:
+    prices = raw_data_full['Close'].ffill()
+    rets = prices.pct_change().dropna()
+    
+    if not rets.empty:
+        rets['Heat'] = rets[selected_p].mean(axis=1).rolling(lookback).mean()
+        rets['Rain'] = rets[selected_d].mean(axis=1).rolling(lookback).mean()
+        rets['Signal'] = np.where(rets['Heat'] > rets['Rain'], 1, 0)
+        rets['Base'] = np.where(rets['Signal'] == 1, rets[selected_p].mean(axis=1), rets[selected_d].mean(axis=1))
+        rets['Mkt_Roll'] = rets[mkt_bench].rolling(lookback).sum()
+        rets['Risk_W'] = np.where(rets['Mkt_Roll'] <= crash_limit, 0.0, np.where(rets['Base'].rolling(lookback).sum() < 0, 0.20, 0.80))
+        
+        curr_risk = float(rets['Risk_W'].iloc[-1])
+        rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + ((0.06/252) * (1 - rets['Risk_W'].shift(1)))
+        strat_rets = rets.loc[start_dt:as_of_dt]
 
 # --- 5. UI: TOP METRICS ---
 st.title("🌦️ Weather-Alpha Engine")
@@ -73,8 +100,15 @@ if not strat_rets.empty:
     m1.metric("Net XIRR", f"{((cum_ret.iloc[-1]**(365/max(1, (as_of_dt-start_dt).days))) - 1) * 100:.2f}%")
     m2.metric("Total Profit", f"₹{abs_profit:,.2f}")
     m3.metric("Regime", "🔥 POWER" if rets['Signal'].iloc[-1] == 1 else "🛡️ DEFENSIVE")
-    curr_risk = rets['Risk_W'].iloc[-1]
     m4.metric("Risk Weight", f"{curr_risk*100:.0f}%")
+
+    # RESTORED: Growth Chart
+    fig_growth = go.Figure()
+    fig_growth.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret, name="Strategy Path", line=dict(color='#00FFAA', width=3)))
+    fig_growth.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10), title="Strategy Growth Path")
+    st.plotly_chart(fig_growth, use_container_width=True)
+else:
+    st.warning("Awaiting market data or analysis window...")
 
 # --- 6. ACTIONABLE TARGETS & LEDGER ---
 st.markdown("---")
@@ -85,7 +119,7 @@ with c1:
     st.subheader(f"🎯 Actionable Targets (₹{deployed_cap:,.2f})")
     if curr_risk == 0:
         st.error("🚨 BLACK SWAN GATE ACTIVE: Stay in Cash.")
-    else:
+    elif not rets.empty:
         active_basket = selected_p if rets['Signal'].iloc[-1] == 1 else selected_d
         cap_per = deployed_cap / len(active_basket)
         t_cols = st.columns(len(active_basket))
@@ -99,43 +133,53 @@ with c1:
 
 with c2:
     st.subheader("📝 Trade Ledger")
-    # Quick Add
-    with st.expander("➕ Log New Trade"):
+    # NEW: Bulk Sync from Kite
+    with st.expander("📥 Bulk Sync from Kite"):
+        kite_input = st.text_area("Paste CSV columns here:", height=100)
+        if st.button("Process & Sync"):
+            new_data = parse_bulk_kite_data(kite_input)
+            if new_data is not None:
+                st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_data]).drop_duplicates(subset=["Date", "Ticker"], keep='last')
+                save_ledger()
+                st.success("Synced!")
+                st.rerun()
+
+    # Quick Add Form
+    with st.expander("➕ Manual Log"):
         with st.form("add_t", clear_on_submit=True):
             f1, f2, f3 = st.columns(3)
             ticker = f1.selectbox("Ticker", all_tix)
             qty = f2.number_input("Qty", min_value=1)
-            price = f3.number_input("Price", value=float(prices[ticker].iloc[-1]))
+            price = f3.number_input("Price", value=float(prices[ticker].iloc[-1]) if not rets.empty else 0.0)
             if st.form_submit_button("Log"):
                 new_row = pd.DataFrame([{"Date": datetime.now().strftime("%Y-%m-%d"), "Ticker": ticker, "Type": "BUY", "Qty": qty, "Price": price}])
                 st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_row], ignore_index=True)
                 save_ledger()
                 st.rerun()
     
-    # Editable Table
     if not st.session_state.trade_log.empty:
         edited_df = st.data_editor(st.session_state.trade_log, num_rows="dynamic", use_container_width=True)
-        if st.button("💾 Save Changes"):
+        if st.button("💾 Save Table Changes"):
             st.session_state.trade_log = edited_df
             save_ledger()
-            st.success("Saved!")
 
-# --- 7. TECHNICAL CHART (ATR BANDS 5, 3) ---
+# --- 7. TECHNICAL CHART ---
 st.markdown("---")
 st.subheader("📊 Technical Deep Dive")
 inspect_stock = st.selectbox("Inspect Asset", all_tix)
 
-df_t = raw_data_full.xs(inspect_stock, axis=1, level=1).copy() if isinstance(raw_data_full.columns, pd.MultiIndex) else raw_data_full.copy()
-df_t['TR'] = pd.concat([df_t['High']-df_t['Low'], abs(df_t['High']-df_t['Close'].shift(1)), abs(df_t['Low']-df_t['Close'].shift(1))], axis=1).max(axis=1)
-df_t['ATR'] = df_t['TR'].rolling(5).mean()
-df_t['Mid'] = df_t['Close'].rolling(5).mean()
-df_t['Upper'] = df_t['Mid'] + (df_t['ATR'] * 3)
-df_t['Lower'] = df_t['Mid'] - (df_t['ATR'] * 3)
-df_p = df_t.loc[start_dt:as_of_dt]
+if not raw_data_full.empty:
+    df_t = raw_data_full.xs(inspect_stock, axis=1, level=1).copy() if isinstance(raw_data_full.columns, pd.MultiIndex) else raw_data_full.copy()
+    df_t['TR'] = pd.concat([df_t['High']-df_t['Low'], abs(df_t['High']-df_t['Close'].shift(1)), abs(df_t['Low']-df_t['Close'].shift(1))], axis=1).max(axis=1)
+    df_t['ATR'] = df_t['TR'].rolling(5).mean()
+    df_t['Mid'] = df_t['Close'].rolling(5).mean()
+    df_t['Upper'] = df_t['Mid'] + (df_t['ATR'] * 3)
+    df_t['Lower'] = df_t['Mid'] - (df_t['ATR'] * 3)
+    df_p = df_t.loc[start_dt:as_of_dt]
 
-fig_tech = go.Figure()
-fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Upper'], line=dict(color='rgba(0,0,0,0)'), showlegend=False))
-fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Lower'], line=dict(color='rgba(0,0,0,0)'), fill='tonexty', fillcolor='rgba(100,100,100,0.2)', name="ATR Bands"))
-fig_tech.add_trace(go.Candlestick(x=df_p.index, open=df_p['Open'], high=df_p['High'], low=df_p['Low'], close=df_p['Close'], name="Price"))
-fig_tech.update_layout(template="plotly_dark", height=450, xaxis_rangeslider_visible=False)
-st.plotly_chart(fig_tech, use_container_width=True)
+    fig_tech = go.Figure()
+    fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Upper'], line=dict(color='rgba(0,0,0,0)'), showlegend=False))
+    fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Lower'], line=dict(color='rgba(0,0,0,0)'), fill='tonexty', fillcolor='rgba(100,100,100,0.2)', name="ATR Bands"))
+    fig_tech.add_trace(go.Candlestick(x=df_p.index, open=df_p['Open'], high=df_p['High'], low=df_p['Low'], close=df_p['Close'], name="Price"))
+    fig_tech.update_layout(template="plotly_dark", height=450, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig_tech, use_container_width=True)
