@@ -8,3 +8,4 @@ yfinance==0.2.32
 matplotlib==3.8.2
 numpy==1.24.3
 streamlit>=1.28.0
+st-gsheets-connection
