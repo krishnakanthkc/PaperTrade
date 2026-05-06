@@ -7,229 +7,191 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import io
 
-# --- 1. CONFIG & CLOUD LEDGER ---
-st.set_page_config(page_title="Weather-Alpha Engine 2026", layout="wide")
+# --- 1. CONFIG & CSS INJECTIONS ---
+st.set_page_config(page_title="Weather-Alpha 2026", layout="wide", initial_sidebar_state="collapsed")
 
-# Public Spreadsheet URL
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    [data-testid="stMetricValue"] { font-size: 2.2rem; font-weight: 800; color: #E0E0E0; }
+    [data-testid="stMetricLabel"] { font-size: 1rem; color: #888888; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;}
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; padding-bottom: 10px; }
+    .stTabs [data-baseweb="tab"] { font-size: 1.1rem; font-weight: 600; }
+    [data-testid="collapsedControl"] { display: none; }
+    @media (max-width: 640px) {
+        [data-testid="stMetricValue"] { font-size: 1.5rem; }
+        .main .block-container { padding-top: 2rem; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. CLOUD DATABASE ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1g6MPLJ71mex86k4EJW0XMfEt5oKXLMnh5x0C6toiSdE/edit#gid=0"
-
-# Establish connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Initialize Session State from Cloud Database
 if 'trade_log' not in st.session_state:
     try:
-        # Pulling from the "Ledger" worksheet specifically
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ledger", usecols=list(range(5)))
-        df = df.dropna(how="all") 
-        
+        # Pre-process dates to objects for the editor
         if not df.empty:
-            st.session_state.trade_log = df
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.date
+            st.session_state.trade_log = df.dropna(how="all")
         else:
             st.session_state.trade_log = pd.DataFrame(columns=["Date", "Ticker", "Type", "Qty", "Price"])
-    except Exception as e:
-        st.warning(f"Connecting to Cloud... Starting with local session. Error: {e}")
+    except:
         st.session_state.trade_log = pd.DataFrame(columns=["Date", "Ticker", "Type", "Qty", "Price"])
 
 def save_ledger():
     try:
-        # Note: Writing requires Service Account credentials in secrets.toml
-        conn.update(spreadsheet=SHEET_URL, worksheet="Ledger", data=st.session_state.trade_log)
-        st.success("Cloud Ledger Updated!")
-    except Exception as e:
-        st.error(f"Save failed. Writing to Sheets requires a configured Service Account. Error: {e}")
+        # Convert objects back to strings for GSheets stability
+        save_df = st.session_state.trade_log.copy()
+        save_df['Date'] = save_df['Date'].astype(str)
+        conn.update(spreadsheet=SHEET_URL, worksheet="Ledger", data=save_df)
+        st.toast("✅ Cloud Ledger Updated!")
+    except: st.error("Save failed. Verify GSheets access.")
 
-def parse_bulk_kite_data(raw_text):
+def parse_bulk_kite(raw_text):
     try:
         df = pd.read_csv(io.StringIO(raw_text.strip()))
-        upload_df = pd.DataFrame({
-            "Date": datetime.now().strftime("%Y-%m-%d"),
+        return pd.DataFrame({
+            "Date": datetime.now().date(),
             "Ticker": df["Instrument"].astype(str) + ".NS",
-            "Type": "BUY",
-            "Qty": df["Qty."],
-            "Price": df["Avg."]
+            "Type": "BUY", "Qty": df["Qty."], "Price": df["Avg."]
         })
-        return upload_df
-    except Exception as e:
-        st.error(f"Format Error: {e}")
-        return None
-
-# --- 2. SIDEBAR ---
-st.sidebar.header("🔌 Connectivity")
-use_synthetic = st.sidebar.toggle("Use Synthetic Data (API Bypass)", value=True)
-
-st.sidebar.header("🌌 Asset Universe")
-potential_universe = [
-    "NTPC.NS", "POWERGRID.NS", "NESTLEIND.NS", "HINDUNILVR.NS", 
-    "SUNPHARMA.NS", "RELIANCE.NS", "TCS.NS", "INFY.NS", 
-    "NIPPON_INDIA_SMALL_CAP.NS", "HDFCBANK.NS", "ICICIBANK.NS", "^NSEI"
-]
-
-selected_p = st.sidebar.multiselect("Power Basket", potential_universe, default=["NTPC.NS", "POWERGRID.NS"])
-selected_d = st.sidebar.multiselect("Defensive Basket", potential_universe, default=["NESTLEIND.NS", "HINDUNILVR.NS", "SUNPHARMA.NS"])
-
-st.sidebar.header("🕹️ Strategy Controls")
-
-# UPDATED: Portfolio Value (10k default, 1k step)
-port_val = st.sidebar.number_input("Portfolio Value (INR)", min_value=1000, value=10000, step=1000)
-
-mkt_bench = st.sidebar.selectbox("Market Benchmark", ["^NSEI"])
-
-# UPDATED: T-1 and Today logic
-today = datetime.now().date()
-yesterday = today - timedelta(days=1)
-
-start_dt = st.sidebar.date_input("Backtest Start", value=yesterday)
-as_of_dt = st.sidebar.date_input("Analysis 'As Of' Date", value=today)
-
-lookback = st.sidebar.slider("Rolling Window", 3, 30, 3)
-crash_limit = st.sidebar.slider("Black Swan Threshold (%)", -10.0, -1.0, -4.0, 0.5) / 100.0
-
-# --- 3. DATA ENGINE ---
-@st.cache_data(ttl=600)
-def fetch_data(tickers, start, end):
-    try:
-        # Buffer historical data (100 days) to allow for rolling calculations
-        data = yf.download(tickers, start=start-timedelta(days=100), end=end+timedelta(days=1), progress=False)
-        return data if not data.empty else None
     except: return None
 
-all_tix = list(set(selected_p + selected_d + [mkt_bench]))
-raw_data_full = fetch_data(all_tix, start_dt, as_of_dt)
+# --- 3. GLOBAL ASSET CONFIG ---
+p_basket = ["NTPC.NS", "POWERGRID.NS"]
+d_basket = ["NESTLEIND.NS", "HINDUNILVR.NS", "SUNPHARMA.NS"]
+mkt_bench = "^NSEI"
+all_tix = list(set(p_basket + d_basket + [mkt_bench]))
 
-# --- 4. CALCULATIONS ---
-curr_risk = 0.0 
-rets = pd.DataFrame()
-strat_rets = pd.DataFrame()
+@st.cache_data(ttl=600)
+def fetch_data(tickers, start):
+    try: return yf.download(tickers, start=start-timedelta(days=100), end=datetime.now()+timedelta(days=1), progress=False)
+    except: return None
 
-if raw_data_full is not None and not raw_data_full.empty:
-    prices = raw_data_full['Close'].ffill()
-    rets = prices.pct_change().dropna()
-    
-    if not rets.empty:
-        rets['Heat'] = rets[selected_p].mean(axis=1).rolling(lookback).mean()
-        rets['Rain'] = rets[selected_d].mean(axis=1).rolling(lookback).mean()
-        rets['Signal'] = np.where(rets['Heat'] > rets['Rain'], 1, 0)
-        rets['Base'] = np.where(rets['Signal'] == 1, rets[selected_p].mean(axis=1), rets[selected_d].mean(axis=1))
-        rets['Mkt_Roll'] = rets[mkt_bench].rolling(lookback).sum()
-        rets['Risk_W'] = np.where(rets['Mkt_Roll'] <= crash_limit, 0.0, np.where(rets['Base'].rolling(lookback).sum() < 0, 0.20, 0.80))
-        
-        curr_risk = float(rets['Risk_W'].iloc[-1])
-        rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + ((0.06/252) * (1 - rets['Risk_W'].shift(1)))
-        
-        # Ensure dates match selection for metrics
-        strat_rets = rets.loc[pd.to_datetime(start_dt):pd.to_datetime(as_of_dt)]
+raw_data_master = fetch_data(all_tix, datetime(2016, 5, 5))
 
-# --- 5. UI: TOP METRICS & GROWTH CHART ---
+def run_strategy(df_prices, lookback_val, crash_val):
+    rets = df_prices.pct_change().dropna()
+    rets['Heat'] = rets[p_basket].mean(axis=1).rolling(lookback_val).mean()
+    rets['Rain'] = rets[d_basket].mean(axis=1).rolling(lookback_val).mean()
+    rets['Signal'] = np.where(rets['Heat'] > rets['Rain'], 1, 0)
+    rets['Base'] = np.where(rets['Signal'] == 1, rets[p_basket].mean(axis=1), rets[d_basket].mean(axis=1))
+    rets['Mkt_Roll'] = rets[mkt_bench].rolling(lookback_val).sum()
+    rets['Risk_W'] = np.where(rets['Mkt_Roll'] <= crash_val, 0.0, np.where(rets['Base'].rolling(lookback_val).sum() < 0, 0.20, 0.80))
+    rets['Strat'] = (rets['Base'] * rets['Risk_W'].shift(1)) + ((0.06/252) * (1 - rets['Risk_W'].shift(1)))
+    return rets
+
+# --- 4. APP LAYOUT ---
 st.title("🌦️ Weather-Alpha Engine")
-if not strat_rets.empty:
-    cum_ret = (1 + strat_rets['Strat']).cumprod()
-    abs_profit = port_val * (cum_ret.iloc[-1] - 1)
-    
-    m1, m2 = st.columns(2)
-    m3, m4 = st.columns(2)
-    
-    # Calculate XIRR based on duration
-    days_held = max(1, (as_of_dt - start_dt).days)
-    xirr_val = ((cum_ret.iloc[-1]**(365/days_held)) - 1) * 100
-    
-    m1.metric("Estimated XIRR", f"{xirr_val:.2f}%")
-    m2.metric("Total Profit", f"₹{abs_profit:,.2f}")
-    m3.metric("Regime", "🔥 POWER" if rets['Signal'].iloc[-1] == 1 else "🛡️ DEFENSIVE")
-    m4.metric("Risk Weight", f"{curr_risk*100:.0f}%")
+tab_live, tab_backtest, tab_tech, tab_ledger = st.tabs(["🏠 Live Operations", "🧪 Sandbox", "🔍 Technicals", "📓 Ledger"])
 
-    fig_growth = go.Figure()
-    fig_growth.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret, name="Strategy Path", line=dict(color='#00FFAA', width=3)))
-    fig_growth.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10), title="Strategy Growth Path")
-    st.plotly_chart(fig_growth, use_container_width=True)
-
-# --- 6. PORTFOLIO-AWARE ACTIONABLE TARGETS & LEDGER ---
-st.markdown("---")
-c1, c2 = st.columns([1.2, 1])
-
-with c1:
-    deployed_cap = port_val * curr_risk
-    st.subheader(f"🎯 Actionable Targets (Total ₹{deployed_cap:,.2f})")
-    
-    if curr_risk == 0:
-        st.error("🚨 BLACK SWAN GATE ACTIVE: Stay in Cash.")
-    elif not rets.empty:
-        active_basket = selected_p if rets['Signal'].iloc[-1] == 1 else selected_d
-        cap_per = deployed_cap / len(active_basket)
+# --- TAB 1: LIVE OPERATIONS ---
+with tab_live:
+    with st.container(border=True):
+        st.markdown("### 🏦 Capital Settings")
+        port_val = st.number_input("Total Account Value (INR)", min_value=1000, value=10000, step=1000)
         
-        holding_summary = st.session_state.trade_log.groupby("Ticker")["Qty"].sum().to_dict()
+    if raw_data_master is not None:
+        live_rets = run_strategy(raw_data_master['Close'].ffill(), 3, -0.04)
+        curr_risk = float(live_rets['Risk_W'].iloc[-1])
+        
+        # Portfolio Math
+        ledger = st.session_state.trade_log
+        if not ledger.empty:
+            current_prices = raw_data_master['Close'].ffill().iloc[-1]
+            ledger_with_val = ledger.copy()
+            ledger_with_val['Current_Val'] = ledger_with_val.apply(lambda x: x['Qty'] * current_prices[x['Ticker']] if x['Ticker'] in current_prices else 0, axis=1)
+            current_pos_val = ledger_with_val['Current_Val'].sum()
+            actual_pnl = current_pos_val - (ledger_with_val['Qty'] * ledger_with_val['Price']).sum()
+        else:
+            current_pos_val, actual_pnl = 0.0, 0.0
 
+        target_val = port_val * curr_risk
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Regime", "☀️ POWER" if live_rets['Signal'].iloc[-1] == 1 else "🛡️ DEFENSIVE")
+        m2.metric("Exposure", f"₹{target_val:,.0f}", f"{curr_risk*100:.0f}%")
+        m3.metric("Deployed", f"₹{current_pos_val:,.0f}", f"Gap ₹{target_val-current_pos_val:,.0f}")
+        m4.metric("Net P&L", f"₹{actual_pnl:,.0f}", f"{(actual_pnl/port_val)*100:.2f}%" if port_val else "0%")
+
+        cum_ret_live = (1 + live_rets['Strat']).cumprod()
+        fig_live = go.Figure(go.Scatter(x=cum_ret_live.index, y=cum_ret_live, fill='tozeroy', fillcolor='rgba(0, 255, 170, 0.1)', line=dict(color='#00FFAA', width=2)))
+        fig_live.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=20,b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig_live, use_container_width=True)
+
+        st.markdown("### 🎯 Targets")
+        active_basket = p_basket if live_rets['Signal'].iloc[-1] == 1 else d_basket
+        holdings = ledger.groupby("Ticker")["Qty"].sum().to_dict() if not ledger.empty else {}
         t_cols = st.columns(len(active_basket))
         for i, t in enumerate(active_basket):
-            p = prices[t].iloc[-1]
-            target_qty = int(cap_per // p)
-            actual_qty = holding_summary.get(t, 0)
-            
+            p = raw_data_master['Close'][t].iloc[-1]
+            target_qty = int((target_val / len(active_basket)) // p)
             with t_cols[i]:
-                if actual_qty >= target_qty and target_qty > 0:
-                    st.success(f"**{t}**")
-                    st.metric("✅ Owned", f"{actual_qty}")
-                elif target_qty > 0:
-                    st.warning(f"**{t}**")
-                    st.metric("⚠️ Buy", f"{target_qty - actual_qty}")
-                st.caption(f"LTP: ₹{p:,.2f}")
+                with st.container(border=True):
+                    st.write(f"**{t}**")
+                    if holdings.get(t, 0) >= target_qty and target_qty > 0: st.success("Filled")
+                    elif target_qty > 0: st.warning(f"Buy {target_qty - holdings.get(t, 0)}")
+                    else: st.error("No Allocation")
 
-with c2:
-    st.subheader("📝 Trade Ledger")
-    with st.expander("📥 Bulk Sync from Kite"):
-        kite_input = st.text_area("Paste CSV columns here:", height=100)
-        if st.button("Process & Sync", use_container_width=True):
-            new_data = parse_bulk_kite_data(kite_input)
+# --- TAB 2: SANDBOX ---
+with tab_backtest:
+    st.markdown("### 🔬 Strategy Backtest")
+    with st.container(border=True):
+        bc1, bc2, bc3 = st.columns(3)
+        bt_start = bc1.date_input("Start", value=datetime.now() - timedelta(days=365))
+        bt_lookback = bc2.number_input("Window", min_value=3, value=5)
+        bt_crash = bc3.slider("Crash Threshold %", -15.0, -1.0, -4.0) / 100.0
+
+    if raw_data_master is not None:
+        bt_data = raw_data_master['Close'].ffill().loc[pd.to_datetime(bt_start):]
+        bt_rets = run_strategy(bt_data, bt_lookback, bt_crash)
+        cum_ret_bt = (1 + bt_rets['Strat']).cumprod()
+        fig_bt = go.Figure(go.Scatter(x=cum_ret_bt.index, y=cum_ret_bt, fill='tozeroy', fillcolor='rgba(255, 179, 0, 0.1)', line=dict(color='#FFB300')))
+        fig_bt.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=20,b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig_bt, use_container_width=True)
+
+# --- TAB 3: TECHNICALS ---
+with tab_tech:
+    inspect_stock = st.selectbox("Asset Scanner", all_tix)
+    if raw_data_master is not None:
+        try:
+            df_t = raw_data_master.xs(inspect_stock, axis=1, level=1).copy() if isinstance(raw_data_master.columns, pd.MultiIndex) else raw_data_master.copy()
+            df_t['TR'] = pd.concat([df_t['High']-df_t['Low'], abs(df_t['High']-df_t['Close'].shift(1)), abs(df_t['Low']-df_t['Close'].shift(1))], axis=1).max(axis=1)
+            df_t['ATR'] = df_t['TR'].rolling(14).mean()
+            df_t['Mid'] = df_t['Close'].rolling(14).mean()
+            df_p = df_t.tail(120)
+            fig_tech = go.Figure(go.Candlestick(x=df_p.index, open=df_p['Open'], high=df_p['High'], low=df_p['Low'], close=df_p['Close']))
+            fig_tech.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig_tech, use_container_width=True)
+        except: st.error("Incomplete OHLC data for this asset.")
+
+# --- TAB 4: LEDGER ---
+with tab_ledger:
+    st.markdown("### 📓 Trade History")
+    with st.expander("📥 Kite Bulk Sync"):
+        kite_input = st.text_area("Paste CSV:", height=80)
+        if st.button("Sync"):
+            new_data = parse_bulk_kite(kite_input)
             if new_data is not None:
                 st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_data]).drop_duplicates(subset=["Date", "Ticker"], keep='last')
-                save_ledger()
-                st.rerun()
+                save_ledger(); st.rerun()
 
-    with st.expander("➕ Manual Log"):
-        with st.form("add_t", clear_on_submit=True):
-            f1, f2, f3 = st.columns(3)
-            ticker = f1.selectbox("Ticker", all_tix)
-            qty = f2.number_input("Qty", min_value=1)
-            # Safe LTP fetch for the manual form
-            ltp_val = float(prices[ticker].iloc[-1]) if (not rets.empty and ticker in prices.columns) else 0.0
-            price = f3.number_input("Price", value=ltp_val)
-            if st.form_submit_button("Log", use_container_width=True):
-                new_row = pd.DataFrame([{"Date": datetime.now().strftime("%Y-%m-%d"), "Ticker": ticker, "Type": "BUY", "Qty": qty, "Price": price}])
-                st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_row], ignore_index=True)
-                save_ledger()
-                st.rerun()
+    # Safe conversion for editor compatibility
+    st.session_state.trade_log['Date'] = pd.to_datetime(st.session_state.trade_log['Date'], errors='coerce').dt.date
     
-    if not st.session_state.trade_log.empty:
-        edited_df = st.data_editor(st.session_state.trade_log, num_rows="dynamic", use_container_width=True, key="ledger_editor")
-        if st.button("💾 Save Table Changes", use_container_width=True):
-            st.session_state.trade_log = edited_df
-            save_ledger()
-
-# --- 7. TECHNICAL CHART ---
-st.markdown("---")
-st.subheader("📊 Technical Deep Dive")
-inspect_stock = st.selectbox("Inspect Asset", all_tix)
-
-if raw_data_full is not None and not raw_data_full.empty:
-    try:
-        # Handle MultiIndex Columns from yfinance download
-        if isinstance(raw_data_full.columns, pd.MultiIndex):
-            df_t = raw_data_full.xs(inspect_stock, axis=1, level=1).copy()
-        else:
-            df_t = raw_data_full.copy()
-            
-        df_t['TR'] = pd.concat([df_t['High']-df_t['Low'], abs(df_t['High']-df_t['Close'].shift(1)), abs(df_t['Low']-df_t['Close'].shift(1))], axis=1).max(axis=1)
-        df_t['ATR'] = df_t['TR'].rolling(5).mean()
-        df_t['Mid'] = df_t['Close'].rolling(5).mean()
-        df_t['Upper'] = df_t['Mid'] + (df_t['ATR'] * 3)
-        df_t['Lower'] = df_t['Mid'] - (df_t['ATR'] * 3)
-        df_p = df_t.loc[pd.to_datetime(start_dt):pd.to_datetime(as_of_dt)]
-
-        fig_tech = go.Figure()
-        fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Upper'], line=dict(color='rgba(0,0,0,0)'), showlegend=False))
-        fig_tech.add_trace(go.Scatter(x=df_p.index, y=df_p['Lower'], line=dict(color='rgba(0,0,0,0)'), fill='tonexty', fillcolor='rgba(100,100,100,0.2)', name="ATR Bands"))
-        fig_tech.add_trace(go.Candlestick(x=df_p.index, open=df_p['Open'], high=df_p['High'], low=df_p['Low'], close=df_p['Close'], name="Price"))
-        fig_tech.update_layout(template="plotly_dark", height=450, xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig_tech, use_container_width=True)
-    except Exception as e:
-        st.error(f"Technical Chart Error: {e}")
+    edited_df = st.data_editor(
+        st.session_state.trade_log, 
+        num_rows="dynamic", use_container_width=True,
+        column_config={
+            "Date": st.column_config.DateColumn("Date"),
+            "Ticker": st.column_config.SelectboxColumn("Asset", options=all_tix),
+            "Type": st.column_config.SelectboxColumn("Type", options=["BUY", "SELL"])
+        }
+    )
+    if st.button("💾 Save to GSheets", type="primary"):
+        st.session_state.trade_log = edited_df
+        save_ledger()
