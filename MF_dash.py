@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import time
 
 # 1. Advanced Radar Interface Configurations
-st.set_page_config(page_title="Tactical MF Radar v4.0", layout="wide")
+st.set_page_config(page_title="Tactical MF Radar v5.0", layout="wide")
 
 st.markdown("""
 <style>
@@ -19,7 +20,6 @@ st.markdown("""
     }
     hr { border-color: #004411; }
     
-    /* Input Form Field Aesthetics */
     .stTextInput input, .stSelectbox div[data-baseweb="select"] {
         background-color: #001100 !important;
         color: #00ff33 !important;
@@ -27,7 +27,6 @@ st.markdown("""
         box-shadow: 0 0 8px #004411;
     }
     
-    /* Terminal HUD Data blocks */
     [data-testid="stMetricValue"] {
         color: #00ff33 !important;
         text-shadow: 0 0 10px #00ff33;
@@ -37,7 +36,6 @@ st.markdown("""
         color: #00aa22 !important;
     }
     
-    /* Radar Scan Action Button */
     .stButton>button {
         background-color: #002200;
         color: #00ff33;
@@ -53,7 +51,6 @@ st.markdown("""
         box-shadow: 0 0 20px #00ff33;
     }
     
-    /* Intercept Diagnostic Panel */
     .radar-intercept {
         background-color: #001100;
         border: 2px dashed #00ff33;
@@ -65,7 +62,31 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Local Strategic Backup Directory (Prevents 502 Server Crashes)
+# 2. Stealth Network Protocols & Caching
+@st.cache_data(ttl=3600, show_spinner=False)
+def stealth_fetch(url, max_retries=3):
+    """Spoofs browser headers and auto-retries on 502/503 jams."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response
+            elif response.status_code in [502, 503, 504]:
+                # Server jam: wait and retry (exponential backoff)
+                time.sleep(1.5 ** attempt) 
+            else:
+                return response
+        except requests.exceptions.RequestException:
+            time.sleep(1.5 ** attempt)
+            
+    return None # Return None if all retries fail
+
+# Local Strategic Backup Directory
 LOCAL_RADAR_DB = {
     "Parag Parikh Flexi Cap Fund (Direct - Growth)": "122639",
     "HDFC Balanced Advantage Fund (Direct - Growth)": "119063",
@@ -106,39 +127,33 @@ def identify_alternatives(fund_name):
         ]
 
 # 3. Main HUD Interface Layout
-st.title("📡 TACTICAL MF RADAR Terminal v4.0")
-st.markdown("SYSTEM STATUS: **ONLINE** | ENCRYPTED ANTI-JAMMING PROTOCOLS RE-ENGAGED")
+st.title("📡 TACTICAL MF RADAR Terminal v5.0")
+st.markdown("SYSTEM STATUS: **ONLINE** | STEALTH PROTOCOLS ACTIVE")
 st.write("---")
 
-# Split control grid into parallel frequencies
 col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.subheader("⚡ TARGET ACQUISITION")
-    query = st.text_input("SCAN SYSTEM AIRSPACE (Type keywords like 'icici fof', 'parag', 'small cap'):", "").strip()
+    query = st.text_input("SCAN SYSTEM AIRSPACE (Type keywords like 'icici fof', 'parag'):", "").strip()
     
     final_scheme_code = None
     final_scheme_name = None
     
     if query:
-        # Step A: Filter local database targets instantly for Zero-Latency responsiveness
         local_matches = {k: v for k, v in LOCAL_RADAR_DB.items() if query.lower() in k.lower()}
-        
         search_results = []
         server_status = "ONLINE"
         
-        # Step B: Attempt network telemetry query only if local cache yields nothing
         if not local_matches:
-            try:
-                response = requests.get(f"https://api.mfapi.in/mf/search?q={query}", timeout=5)
-                if response.status_code == 200:
-                    search_results = response.json()
-                else:
-                    server_status = f"JAMMED (HTTP {response.status_code})"
-            except Exception:
+            response = stealth_fetch(f"https://api.mfapi.in/mf/search?q={query}")
+            if response and response.status_code == 200:
+                search_results = response.json()
+            elif response:
+                server_status = f"JAMMED (HTTP {response.status_code})"
+            else:
                 server_status = "HARD OFFLINE"
         
-        # Step C: Consolidate target selection pathways
         if local_matches:
             selected_target = st.selectbox("LOCKING LOCAL SIGNAL VECTOR:", list(local_matches.keys()))
             final_scheme_code = local_matches[selected_target]
@@ -178,46 +193,46 @@ with col_right:
 if final_scheme_code:
     st.write("---")
     if st.button("🔴 FIRE DEEP QUANT RADAR SWEEP"):
-        with st.spinner("TRANSMITTING KINETIC RISK PROBES..."):
-            try:
-                raw_response = requests.get(f"https://api.mfapi.in/mf/{final_scheme_code}", timeout=7)
-                if raw_response.status_code == 200:
-                    payload = raw_response.json()
+        with st.spinner("TRANSMITTING KINETIC RISK PROBES (BYPASSING FIREWALLS)..."):
+            
+            raw_response = stealth_fetch(f"https://api.mfapi.in/mf/{final_scheme_code}")
+            
+            if raw_response is None:
+                st.error("SIGNAL TIMEOUT: The AMFI data pipeline failed to respond after multiple bypass attempts.")
+            elif raw_response.status_code == 200:
+                payload = raw_response.json()
+                
+                if 'data' in payload and len(payload['data']) > 0:
+                    df = pd.DataFrame(payload['data'])
+                    df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y')
+                    df['nav'] = pd.to_numeric(df['nav'])
+                    df = df.sort_values('date').reset_index(drop=True)
                     
-                    if 'data' in payload and len(payload['data']) > 0:
-                        df = pd.DataFrame(payload['data'])
-                        df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y')
-                        df['nav'] = pd.to_numeric(df['nav'])
-                        df = df.sort_values('date').reset_index(drop=True)
+                    df['Daily_Return'] = df['nav'].pct_change()
+                    total_days = (df['date'].iloc[-1] - df['date'].iloc[0]).days
+                    
+                    if total_days > 365:
+                        absolute_return = (df['nav'].iloc[-1] / df['nav'].iloc[0]) - 1
+                        cagr = ((1 + absolute_return) ** (365.25 / total_days)) - 1
                         
-                        # Mathematical Metrics Processing
-                        df['Daily_Return'] = df['nav'].pct_change()
-                        total_days = (df['date'].iloc[-1] - df['date'].iloc[0]).days
+                        rfr = 0.065
+                        volatility = df['Daily_Return'].std() * np.sqrt(252)
+                        downside_vol = df[df['Daily_Return'] < 0]['Daily_Return'].std() * np.sqrt(252)
                         
-                        if total_days > 365:
-                            absolute_return = (df['nav'].iloc[-1] / df['nav'].iloc[0]) - 1
-                            cagr = ((1 + absolute_return) ** (365.25 / total_days)) - 1
-                            
-                            rfr = 0.065
-                            volatility = df['Daily_Return'].std() * np.sqrt(252)
-                            downside_vol = df[df['Daily_Return'] < 0]['Daily_Return'].std() * np.sqrt(252)
-                            
-                            sharpe = (cagr - rfr) / volatility if volatility > 0 else 0
-                            sortino = (cagr - rfr) / downside_vol if downside_vol > 0 else 0
-                            
-                            st.subheader(f"📊 HISTORICAL METRICS PROFILE: {final_scheme_name}")
-                            m1, m2, m3 = st.columns(3)
-                            m1.metric("CAGR (ANNUAL VELOCITY)", f"{cagr*100:.2f}%")
-                            m2.metric("SHARPE (EFFICIENCY COEFFICIENT)", f"{sharpe:.2f}")
-                            m3.metric("SORTINO (DOWNSIDE DEFENSE FORCE)", f"{sortino:.2f}")
-                            
-                            st.markdown("### 📈 TRAJECTORY MONITOR")
-                            st.line_chart(df.set_index('date')['nav'], color="#00ff33")
-                        else:
-                            st.error("TELEMETRY ERROR: Under 365 days of chronological data. Metrics cannot compile.")
+                        sharpe = (cagr - rfr) / volatility if volatility > 0 else 0
+                        sortino = (cagr - rfr) / downside_vol if downside_vol > 0 else 0
+                        
+                        st.subheader(f"📊 HISTORICAL METRICS PROFILE: {final_scheme_name}")
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("CAGR (ANNUAL VELOCITY)", f"{cagr*100:.2f}%")
+                        m2.metric("SHARPE (EFFICIENCY)", f"{sharpe:.2f}")
+                        m3.metric("SORTINO (DOWNSIDE DEFENSE)", f"{sortino:.2f}")
+                        
+                        st.markdown("### 📈 TRAJECTORY MONITOR")
+                        st.line_chart(df.set_index('date')['nav'], color="#00ff33")
                     else:
-                        st.error("TELEMETRY FAILURE: Scheme envelope matched but historical data payload is empty.")
+                        st.error("TELEMETRY ERROR: Under 365 days of chronological data. Metrics cannot compile.")
                 else:
-                    st.error(f"COMBAT ALERT: Remote server rejected history request with error code {raw_response.status_code}")
-            except Exception as e:
-                st.error(f"SIGNAL TIMEOUT: The AMFI data pipeline failed to respond. Try manually running code tracking later.")
+                    st.error("TELEMETRY FAILURE: Scheme envelope matched but historical data payload is empty.")
+            else:
+                st.error(f"COMBAT ALERT: Remote server rejected history request with persistent error code {raw_response.status_code}")
