@@ -5,63 +5,20 @@ import requests
 import time
 from datetime import timedelta
 
-# 1. Advanced Radar Interface Configurations
-st.set_page_config(page_title="Tactical MF Radar v6.0", layout="wide")
+# 1. Native Streamlit Configurations (Respects System Light/Dark Mode)
+st.set_page_config(page_title="Tactical MF Radar v7.0", layout="wide")
 
+# Removed hardcoded neon CSS. Using CSS variables so it adapts to Light/Dark mode automatically.
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #030803;
-        color: #00ff33;
-        font-family: 'Courier New', Courier, monospace;
-    }
-    h1, h2, h3, h4, p, span, div, label, li {
-        color: #00ff33 !important;
-        font-family: 'Courier New', Courier, monospace !important;
-    }
-    hr { border-color: #004411; }
-    
-    .stTextInput input, .stSelectbox div[data-baseweb="select"] {
-        background-color: #001100 !important;
-        color: #00ff33 !important;
-        border: 1px solid #00ff33 !important;
-        box-shadow: 0 0 8px #004411;
-    }
-    
-    [data-testid="stMetricValue"] {
-        color: #00ff33 !important;
-        text-shadow: 0 0 10px #00ff33;
-        font-size: 2rem !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #00aa22 !important;
-    }
-    
-    .stButton>button {
-        background-color: #002200;
-        color: #00ff33;
-        border: 2px solid #00ff33;
-        box-shadow: 0 0 12px #002200;
-        font-weight: bold;
-        letter-spacing: 2px;
-        transition: all 0.4s ease;
-    }
-    .stButton>button:hover {
-        background-color: #00ff33;
-        color: #030803 !important;
-        box-shadow: 0 0 20px #00ff33;
-    }
-    
     .radar-intercept {
-        background-color: #001100;
-        border: 2px dashed #00ff33;
+        border: 2px dashed var(--primary-color);
         padding: 20px;
-        border-radius: 4px;
+        border-radius: 8px;
         margin: 15px 0px;
-        box-shadow: inset 0 0 15px rgba(0, 255, 51, 0.2);
+        background-color: rgba(128, 128, 128, 0.05);
     }
     .sim-warning {
-        background-color: #332200;
         border: 1px solid #ffaa00;
         color: #ffaa00 !important;
         padding: 10px;
@@ -89,9 +46,8 @@ def stealth_fetch(url, max_retries=2):
 
 def generate_synthetic_telemetry(fund_name, days=1825):
     """Generates mathematically accurate proxy data if API is jammed."""
-    np.random.seed(hash(fund_name) % (2**32 - 1)) # Consistent randomness per fund
+    np.random.seed(hash(fund_name) % (2**32 - 1))
     
-    # Assign realistic profile based on keywords
     if 'small' in fund_name.lower():
         cagr, vol = 0.22, 0.20
     elif 'flexi' in fund_name.lower():
@@ -137,8 +93,8 @@ def identify_alternatives(fund_name):
         return ["Parag Parikh Flexi Cap", "HDFC Balanced Advantage", "UTI Nifty 50 Index"]
 
 # 3. Main HUD
-st.title("📡 TACTICAL MF RADAR Terminal v6.0")
-st.markdown("SYSTEM STATUS: **ONLINE** | ANTI-JAMMING SYNTHETIC ENGINE: **ARMED**")
+st.title("📡 TACTICAL MF RADAR Terminal v7.0")
+st.markdown("SYSTEM STATUS: **ONLINE** | THEME: **DYNAMIC OS SYNC**")
 st.write("---")
 
 col_left, col_right = st.columns([1, 1])
@@ -151,25 +107,29 @@ with col_left:
     final_scheme_name = None
     
     if query:
-        local_matches = {k: v for k, v in LOCAL_RADAR_DB.items() if query.lower() in k.lower()}
+        combined_options = {}
         
-        if local_matches:
-            selected_target = st.selectbox("LOCKING LOCAL SIGNAL:", list(local_matches.keys()))
-            final_scheme_code = local_matches[selected_target]
+        # Step A: Pull local matches instantly
+        local_matches = {k: v for k, v in LOCAL_RADAR_DB.items() if query.lower() in k.lower()}
+        combined_options.update(local_matches)
+        
+        # Step B: Pull ALL external API matches and combine them
+        payload = stealth_fetch(f"https://api.mfapi.in/mf/search?q={query}")
+        if payload:
+            api_map = {item['schemeName']: str(item['schemeCode']) for item in payload}
+            combined_options.update(api_map)
+        
+        # Step C: Display combined list
+        if combined_options:
+            selected_target = st.selectbox("LOCKING SIGNAL (Local & API Data Combined):", list(combined_options.keys()))
+            final_scheme_code = combined_options[selected_target]
             final_scheme_name = selected_target
         else:
-            payload = stealth_fetch(f"https://api.mfapi.in/mf/search?q={query}")
-            if payload:
-                api_map = {item['schemeName']: item['schemeCode'] for item in payload}
-                selected_target = st.selectbox("LOCKING EXTERNAL SIGNAL:", list(api_map.keys()))
-                final_scheme_code = api_map[selected_target]
-                final_scheme_name = selected_target
-            else:
-                st.warning("⚠️ EXTERNAL API JAMMED. MANUAL OVERRIDE REQUIRED.")
-                manual_code = st.text_input("INPUT 6-DIGIT AMFI CODE:", "")
-                if manual_code.isdigit():
-                    final_scheme_code = manual_code
-                    final_scheme_name = f"UNKNOWN TARGET [#{manual_code}]"
+            st.warning("⚠️ NO TARGETS FOUND AND EXTERNAL API JAMMED. MANUAL OVERRIDE REQUIRED.")
+            manual_code = st.text_input("INPUT 6-DIGIT AMFI CODE:", "")
+            if manual_code.isdigit():
+                final_scheme_code = manual_code
+                final_scheme_name = f"UNKNOWN TARGET [#{manual_code}]"
 
 with col_right:
     st.subheader("🎯 INTERCEPT DIAGNOSTICS")
@@ -187,10 +147,9 @@ with col_right:
 # 4. Telemetry Engine & Simulation
 if final_scheme_code:
     st.write("---")
-    if st.button("🔴 FIRE DEEP QUANT RADAR SWEEP"):
+    if st.button("FIRE DEEP QUANT RADAR SWEEP", type="primary"):
         with st.spinner("PULLING LIVE TELEMETRY..."):
             
-            # Attempt to pull real data
             is_synthetic = False
             raw_payload = stealth_fetch(f"https://api.mfapi.in/mf/{final_scheme_code}")
             
@@ -200,15 +159,12 @@ if final_scheme_code:
                 df['nav'] = pd.to_numeric(df['nav'])
                 df = df.sort_values('date').reset_index(drop=True)
             else:
-                # API FAILED: Trigger Synthetic Fallback
                 is_synthetic = True
                 df = generate_synthetic_telemetry(final_scheme_name)
             
-            # --- COMBAT SIMULATION & METRICS ---
             df['Daily_Return'] = df['nav'].pct_change()
             total_days = (df['date'].iloc[-1] - df['date'].iloc[0]).days
             
-            # Simulate 10 Lakh (₹1,000,000) Investment
             initial_investment = 1000000
             units_bought = initial_investment / df['nav'].iloc[0]
             df['Portfolio_Value'] = df['nav'] * units_bought
@@ -221,7 +177,7 @@ if final_scheme_code:
             sharpe = (cagr - 0.065) / volatility if volatility > 0 else 0
             
             if is_synthetic:
-                st.markdown("<div class='sim-warning'>⚠️ LIVE SIGNAL LOST: Displaying offline AI-generated synthetic telemetry based on category risk profiles.</div><br>", unsafe_allow_html=True)
+                st.markdown("<div class='sim-warning'>⚠️ LIVE SIGNAL LOST: Displaying offline AI-generated synthetic telemetry.</div><br>", unsafe_allow_html=True)
             
             st.subheader(f"📊 DEPLOYMENT SIMULATION: ₹10,00,000 in {final_scheme_name}")
             
@@ -232,4 +188,4 @@ if final_scheme_code:
             m4.metric("SHARPE (EFFICIENCY)", f"{sharpe:.2f}")
             
             st.markdown("### 📈 PORTFOLIO TRAJECTORY (₹)")
-            st.line_chart(df.set_index('date')['Portfolio_Value'], color="#00ff33")
+            st.line_chart(df.set_index('date')['Portfolio_Value'])
