@@ -6,7 +6,7 @@ import time
 from datetime import timedelta
 
 # 1. Native Streamlit Configurations
-st.set_page_config(page_title="Tactical MF Radar v8.0", layout="wide")
+st.set_page_config(page_title="Tactical MF Radar v8.1", layout="wide")
 
 st.markdown("""
 <style>
@@ -31,6 +31,14 @@ st.markdown("""
         border-radius: 4px;
         font-weight: bold;
     }
+    .inception-tag {
+        color: var(--text-color);
+        opacity: 0.7;
+        font-style: italic;
+        font-size: 0.9rem;
+        margin-top: -10px;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,7 +58,8 @@ def stealth_fetch(url, max_retries=2):
             time.sleep(1)
     return None
 
-def generate_synthetic_telemetry(fund_name, days=1825):
+# Expanded to 10 years (3650 days) for "Since Inception" simulation realism
+def generate_synthetic_telemetry(fund_name, days=3650):
     np.random.seed(hash(fund_name) % (2**32 - 1))
     
     if 'small' in fund_name.lower(): cagr, vol = 0.22, 0.20
@@ -83,7 +92,6 @@ LOCAL_RADAR_DB = {
 }
 
 def get_qualitative_intel(fund_name):
-    """Injects qualitative data that AMFI APIs cannot provide."""
     intel_db = {
         "Nippon India Small Cap": {"manager": "Samir Rachh", "tenor": "7.2 Yrs", "history": "Growth at Reasonable Price (GARP). Highly scaled liquidity management.", "er": "0.67%"},
         "Quant Small Cap": {"manager": "Sanjeev Sharma", "tenor": "4.5 Yrs", "history": "VLRT Framework. High churn, momentum-driven tactical execution.", "er": "0.64%"},
@@ -95,7 +103,6 @@ def get_qualitative_intel(fund_name):
         if key.lower() in fund_name.lower():
             return data
             
-    # Deterministic fallback for unmapped funds
     np.random.seed(hash(fund_name) % (2**32 - 1))
     return {
         "manager": "Standard Category Team",
@@ -116,7 +123,7 @@ def identify_alternatives(fund_name):
         return ["Parag Parikh Flexi Cap", "HDFC Balanced Advantage", "UTI Nifty 50 Index"]
 
 # 4. Main HUD
-st.title("📡 TACTICAL MF RADAR Terminal v8.0")
+st.title("📡 TACTICAL MF RADAR Terminal v8.1")
 st.markdown("SYSTEM STATUS: **ONLINE** | INTEL MODULE: **ACTIVE**")
 st.write("---")
 
@@ -169,10 +176,8 @@ if final_scheme_code:
     if st.button("FIRE DEEP QUANT RADAR SWEEP", type="primary"):
         with st.spinner("PULLING LIVE TELEMETRY & INTEL DOSSIERS..."):
             
-            # 5A. Fetch Qualitative Intel
             intel = get_qualitative_intel(final_scheme_name)
             
-            # 5B. Fetch Quantitative Telemetry
             is_synthetic = False
             raw_payload = stealth_fetch(f"https://api.mfapi.in/mf/{final_scheme_code}")
             
@@ -194,22 +199,17 @@ if final_scheme_code:
             final_value = df['Portfolio_Value'].iloc[-1]
             profit = final_value - initial_investment
             
-            # 5C. Advanced Risk Metrics (Sharpe vs Sortino)
             absolute_return = (final_value / initial_investment) - 1
             cagr = ((1 + absolute_return) ** (365.25 / total_days)) - 1
+            rfr = 0.065
             
-            rfr = 0.065 # Risk Free Rate (6.5%)
-            
-            # Total Volatility (For Sharpe)
             volatility = df['Daily_Return'].std() * np.sqrt(252)
             sharpe = (cagr - rfr) / volatility if volatility > 0 else 0
             
-            # Downside Volatility (For Sortino) - Only looks at negative days
             downside_returns = df[df['Daily_Return'] < 0]['Daily_Return']
             downside_vol = downside_returns.std() * np.sqrt(252)
             sortino = (cagr - rfr) / downside_vol if downside_vol > 0 else 0
             
-            # Display Qualitative Intel
             st.subheader("🕵️ MANAGER & STRUCTURAL INTEL")
             st.markdown(f"""
             <div class="intel-card">
@@ -222,18 +222,18 @@ if final_scheme_code:
             if is_synthetic:
                 st.markdown("<div class='sim-warning'>⚠️ LIVE SIGNAL LOST: Displaying offline AI-generated synthetic quantitative telemetry.</div><br>", unsafe_allow_html=True)
             
-            # Display Quantitative Metrics
             st.subheader(f"📊 DEPLOYMENT SIMULATION: ₹10,00,000 in {final_scheme_name}")
             
-            # Split into 5 columns to fit the new Sortino metric
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("CURRENT VAL", f"₹{final_value/100000:,.2f}L")
             m2.metric("NET PROFIT", f"₹{profit/100000:,.2f}L")
             m3.metric("CAGR", f"{cagr*100:.1f}%")
-            
-            # Compare Sharpe vs Sortino
             m4.metric("SHARPE", f"{sharpe:.2f}", "Total Risk", delta_color="off")
-            m5.metric("SORTINO", f"{sortino:.2f}", "Downside Risk Only", delta_color="off")
+            m5.metric("SORTINO", f"{sortino:.2f}", "Downside Risk", delta_color="off")
             
-            st.markdown("### 📈 PORTFOLIO TRAJECTORY (₹)")
+            # Since Inception Tag Added Here
+            st.markdown("<div class='inception-tag'>* Metrics calculated Since Inception</div>", unsafe_allow_html=True)
+            
+            # Chart title updated
+            st.markdown("### 📈 PORTFOLIO TRAJECTORY (₹) [SINCE INCEPTION]")
             st.line_chart(df.set_index('date')['Portfolio_Value'])
