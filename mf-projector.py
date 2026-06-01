@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-# 1. Page Configuration & UI Formatting
-st.set_page_config(page_title="Dynamic Institutional Wealth Forecaster", layout="wide")
-st.title("🛡️ Institutional Wealth & Dynamic SIF Forecast Engine")
-st.markdown("SYSTEM STATUS: **DYNAMIC AIRSPACE MAPPER ONLINE** | HARDCODING: **DEACTIVATED**")
+# 1. Page Configuration
+st.set_page_config(page_title="Multi-Statement Wealth Forecaster", layout="wide")
+st.title("🛡️ Institutional Wealth & Multi-Statement Forecast Engine")
+st.markdown("SYSTEM STATUS: **MULTIPLE FILE INGESTION LAYER ACTIVE** | HARDCODING: **DEACTIVATED**")
 
 # 2. Sidebar Risk Parametrization
 st.sidebar.header("⚡ Macro Stress Parameters")
@@ -25,37 +25,55 @@ sif_short_efficiency = st.sidebar.slider("SIF Short-Hedge Downside Capture (%)",
 st.sidebar.subheader("Capital Allocation")
 NEW_TRANCHE = st.sidebar.number_input("Fresh Deployable Capital (₹)", min_value=100000, max_value=100000000, value=1000000, step=100000, format="%d")
 
-# 3. Dynamic Asset Acquisition Layer (CSV Upload / Manual Table Editor)
-st.subheader("📋 Dynamic Asset Registry Matrix")
-st.write("Upload your portfolio holdings CSV file below, or interactively modify/add assets directly in the spreadsheet grid.")
+# 3. Multi-CSV Ingestion Layer
+st.subheader("📥 Aggregated Asset Registry Matrix")
+st.write("Upload one or multiple portfolio CSV files (e.g., separate files for Mutual Funds and SIFs). The engine will automatically merge them.")
 
-uploaded_file = st.file_uploader("Upload Portfolio CSV Template (Columns required: Fund_Name, Current_Value, Asset_Type)", type=["csv"])
+# Enabling multiple file uploads
+uploaded_files = st.file_uploader(
+    "Upload Portfolio CSV Templates (Columns required: Fund_Name, Current_Value, Asset_Type)", 
+    type=["csv"], 
+    accept_multiple_files=True
+)
 
-# Default fallback structural template if no file uploaded yet
+# Baseline placeholder frame if no files are present
 default_template = pd.DataFrame({
     "Fund_Name": ["Template Equity Asset 1", "Template Alternative Asset 1 (SIF)"],
     "Current_Value": [10000000, 1000000],
     "Asset_Type": ["Mutual Fund", "SIF"]
 })
 
-if uploaded_file is not None:
-    try:
-        raw_df = pd.read_csv(uploaded_file)
-        # Ensure mandatory columns exist
-        if all(col in raw_df.columns for col in ["Fund_Name", "Current_Value", "Asset_Type"]):
-            working_df = raw_df
-            st.success("Target asset file parsed successfully.")
-        else:
-            st.error("CSV Structure Error: Template must contain 'Fund_Name', 'Current_Value', and 'Asset_Type' columns.")
-            working_df = default_template
-    except Exception as e:
-        st.error(f"File Read Failure: {str(e)}")
+parsed_dataframes = []
+
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        try:
+            raw_df = pd.read_csv(uploaded_file)
+            # Standardize column naming rules to prevent key misses
+            raw_df.columns = raw_df.columns.str.strip()
+            
+            # Verify required structural headers match
+            required_cols = ["Fund_Name", "Current_Value", "Asset_Type"]
+            if all(col in raw_df.columns for col in required_cols):
+                parsed_dataframes.append(raw_df[required_cols])
+                st.toast(f"Successfully processed: {uploaded_file.name}", icon="✅")
+            else:
+                st.error(f"Structure Mismatch in '{uploaded_file.name}': Missing one of {required_cols}")
+        except Exception as e:
+            st.error(f"Failed to read '{uploaded_file.name}': {str(e)}")
+
+    if parsed_dataframes:
+        # Concatenate all valid sheets into an integrated master list
+        combined_df = pd.concat(parsed_dataframes, ignore_index=True)
+        # Drop identical rows to clear duplicate entries across statements
+        working_df = combined_df.drop_duplicates().reset_index(drop=True)
+    else:
         working_df = default_template
 else:
     working_df = default_template
-    st.info("Operating under sandbox baseline. Upload your generated portfolio CSV file to view your precise assets.")
+    st.info("Operating under baseline sandbox. Upload your portfolio CSV files to view combined actual holdings.")
 
-# Expose an editable grid to the user to manipulate records or add rows manually
+# Expose an editable aggregate grid to manually tweak entries on the fly
 edited_df = st.data_editor(
     working_df, 
     num_rows="dynamic", 
@@ -66,8 +84,7 @@ edited_df = st.data_editor(
     }
 )
 
-# 4. Runtime Aggregation
-# Calculate live aggregates dynamically based on user manual changes or CSV payload
+# 4. In-Memory Runtime Aggregation
 MUTUAL_FUND_VAL = edited_df[edited_df["Asset_Type"] == "Mutual Fund"]["Current_Value"].sum()
 EXISTING_SIF_VAL = edited_df[edited_df["Asset_Type"] == "SIF"]["Current_Value"].sum()
 TOTAL_EX_ANTE_WEALTH = MUTUAL_FUND_VAL + EXISTING_SIF_VAL
@@ -133,14 +150,14 @@ if TOTAL_EX_ANTE_WEALTH > 0:
     st.write("---")
     c_reg1, c_reg2 = st.columns(2)
     with c_reg1:
-        st.metric("Total Mutual Fund Capital", f"₹{MUTUAL_FUND_VAL:,.2f}")
-        st.metric("Total Alternative SIF Capital", f"₹{EXISTING_SIF_VAL:,.2f}")
+        st.metric("Total Consolidated Mutual Funds", f"₹{MUTUAL_FUND_VAL:,.2f}")
+        st.metric("Total Consolidated SIF Assets", f"₹{EXISTING_SIF_VAL:,.2f}")
     with c_reg2:
-        st.metric("Consolidated Portfolio Valuation Balance", f"₹{TOTAL_EX_ANTE_WEALTH:,.2f}")
-        st.metric("Target New Deployable Deployment Tranche", f"₹{NEW_TRANCHE:,.2f}")
+        st.metric("Aggregate Combined Net Worth", f"₹{TOTAL_EX_ANTE_WEALTH:,.2f}")
+        st.metric("Fresh Target Allocation Tranche", f"₹{NEW_TRANCHE:,.2f}")
 
     st.write("---")
-    with st.spinner("Processing Matrix Simulations..."):
+    with st.spinner("Processing Multi-Statement Matrix Simulations..."):
         timeline = pd.date_range(start=pd.Timestamp.today(), periods=1260, freq='B')
         
         path_flexi_overlay = run_wealth_simulation("Deploy New Tranche in Flexi Cap")
@@ -148,29 +165,29 @@ if TOTAL_EX_ANTE_WEALTH > 0:
         
         df_chart = pd.DataFrame({
             "Date": timeline,
-            f"Total Wealth Matrix (New Tranche → Flexi Cap)": path_flexi_overlay,
-            f"Total Wealth Matrix (New Tranche → SIF Growth)": path_sif_overlay
+            "Total Net Worth (New Tranche → Flexi Cap)": path_flexi_overlay,
+            "Total Net Worth (New Tranche → SIF Expansion)": path_sif_overlay
         }).set_index("Date")
 
     col_metrics1, col_metrics2 = st.columns(2)
     starting_capital = TOTAL_EX_ANTE_WEALTH + NEW_TRANCHE
 
     with col_metrics1:
-        st.markdown("### 🔴 Allocation Scenario A: Route Tranche to Flexi Cap")
+        st.markdown("### 🔴 Scenario A: Route New Tranche to Flexi Cap")
         bottom_f = path_flexi_overlay[504]
         final_f = path_flexi_overlay[-1]
-        st.metric("Portfolio Drop Floor (Year 2 Bottom)", f"₹{bottom_f:,.2f}", f"Drawdown: {((bottom_f-starting_capital)/starting_capital)*100:.2f}%", delta_color="inverse")
-        st.metric("5-Year Terminal Wealth Target", f"₹{final_f:,.2f}", f"Net Return: {((final_f-starting_capital)/starting_capital)*100:.2f}%")
+        st.metric("Combined Floor Value (Year 2 Bottom)", f"₹{bottom_f:,.2f}", f"Drawdown: {((bottom_f-starting_capital)/starting_capital)*100:.2f}%", delta_color="inverse")
+        st.metric("5-Year Terminal Asset Target", f"₹{final_f:,.2f}", f"Net Return: {((final_f-starting_capital)/starting_capital)*100:.2f}%")
 
     with col_metrics2:
-        st.markdown("### 🟢 Allocation Scenario B: Route Tranche to SIF Expansion")
+        st.markdown("### 🟢 Scenario B: Route New Tranche to SIF Expansion")
         bottom_s = path_sif_overlay[504]
         final_s = path_sif_overlay[-1]
-        st.metric("Portfolio Drop Floor (Year 2 Bottom)", f"₹{bottom_s:,.2f}", f"Drawdown: {((bottom_s-starting_capital)/starting_capital)*100:.2f}%", delta_color="inverse")
-        st.metric("5-Year Terminal Wealth Target", f"₹{final_s:,.2f}", f"Net Return: {((final_s-starting_capital)/starting_capital)*100:.2f}%")
+        st.metric("Combined Floor Value (Year 2 Bottom)", f"₹{bottom_s:,.2f}", f"Drawdown: {((bottom_s-starting_capital)/starting_capital)*100:.2f}%", delta_color="inverse")
+        st.metric("5-Year Terminal Asset Target", f"₹{final_s:,.2f}", f"Net Return: {((final_s-starting_capital)/starting_capital)*100:.2f}%")
 
     st.write("---")
-    st.subheader("📉 Dynamic Wealth Trajectory Simulation Projection")
+    st.subheader("📉 Consolidated Wealth Trajectory Simulation Projection")
     st.line_chart(df_chart, color=["#FF4B4B", "#00FF33"])
 else:
-    st.warning("Awaiting configuration data inside registry. Add values or upload your template CSV above.")
+    st.warning("Awaiting statement uploads. Drag and drop your portfolio CSVs above.")
